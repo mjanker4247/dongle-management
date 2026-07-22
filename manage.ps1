@@ -1,6 +1,6 @@
-<#
+﻿<#
 .SYNOPSIS
-  Dongle Manager — local process manager for backend + frontend on Windows.
+  Dongle Manager - local process manager for backend + frontend on Windows.
 
 .DESCRIPTION
   Mirrors ./manage (bash) for Windows PowerShell.
@@ -245,7 +245,7 @@ function Start-BackendBackground {
     Start-Sleep -Seconds 1
 
     if (Test-PidRunning $proc.Id) {
-        Write-Ok "Backend started (pid $($proc.Id)) — log: $BackendLog"
+        Write-Ok "Backend started (pid $($proc.Id)) â€” log: $BackendLog"
     }
     else {
         Write-Err "Backend failed to start; see $BackendLog"
@@ -284,7 +284,7 @@ function Start-FrontendBackground {
     Start-Sleep -Seconds 1
 
     if (Test-PidRunning $proc.Id) {
-        Write-Ok "Frontend started (pid $($proc.Id)) — log: $FrontendLog"
+        Write-Ok "Frontend started (pid $($proc.Id)) â€” log: $FrontendLog"
     }
     else {
         Write-Err "Frontend failed to start; see $FrontendLog"
@@ -589,7 +589,7 @@ function Invoke-Doctor {
 
 function Show-Help {
     @"
-Dongle Manager — local process manager for backend + frontend on Windows.
+Dongle Manager â€” local process manager for backend + frontend on Windows.
 
 Usage:
   .\manage.ps1 <command> [options]
