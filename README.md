@@ -130,6 +130,8 @@ VITE_API_BASE_URL=/api
 
 ```bash
 ./manage test
+# Windows:
+# .\manage.ps1 test
 # or
 cd backend && uv run pytest app/tests -v
 ```
