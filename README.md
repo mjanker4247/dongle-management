@@ -116,13 +116,19 @@ VITE_API_BASE_URL=/api
 cd backend && uv run pytest app/tests -v
 ```
 
-Covered scenarios:
+Covered scenarios (57 tests):
 
-- Completeness check (complete / incomplete / extras)
+- Completeness check (complete / incomplete / extras / inactive modules / empty category)
 - Dongle assigned to only one PC at a time
-- Import duplicates do not create duplicates
-- Enable/disable modules on dongles
-- Import preview does not persist
+- Import duplicates, casing updates, CSV upload, preview-only
+- Enable/disable modules; POST replace vs PUT upsert semantics
+- Case-insensitive uniqueness for locations, PCs, categories, modules, dongle IDs
+- Cascade/delete behavior (locations, PCs, categories, modules, dongles)
+- Category module assignment and manual vs alphabetical order
+- Test module reorder, filters, and auto sort_index
+- Import parsing (headers, CSV columns, BOM, latin-1, newlines)
+- Dashboard counts, unassigned dongles, and dongle search
+- Name normalization helpers
 
 ## Sample CSV imports
 
