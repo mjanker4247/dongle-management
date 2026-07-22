@@ -24,60 +24,82 @@ categories, and test modules.
 ## Project structure
 
 ```
-backend/     FastAPI + SQLAlchemy 2 + Alembic
-frontend/    React + Vite + TypeScript + MUI
+backend/          FastAPI + SQLAlchemy 2 + Alembic (managed with uv)
+frontend/         React + Vite + TypeScript + MUI
+manage            Local start/stop/update management script
 docker-compose.yml
 ```
 
 ## Prerequisites
 
-- Python 3.11+
+- [uv](https://docs.astral.sh/uv/) (Python package manager) — installed automatically by `./manage setup` if missing
 - Node.js 20+
 - Optional: Docker / Docker Compose for PostgreSQL stack
 
-## Backend setup (SQLite local default)
+## Quick start (recommended)
+
+```bash
+./manage setup    # install uv deps, npm deps, create .env, migrate DB
+./manage start    # start backend + frontend in the background
+./manage status
+./manage logs     # follow logs (Ctrl+C to stop following)
+./manage stop
+```
+
+| Command | Description |
+|---------|-------------|
+| `./manage setup` | Install dependencies, env files, and migrate |
+| `./manage update` | Re-sync deps and apply migrations |
+| `./manage update --refresh` | Also refresh `uv.lock` upgrades |
+| `./manage start` / `stop` / `restart` | Control both services |
+| `./manage status` | Process and health status |
+| `./manage logs [backend\|frontend\|all]` | Tail logs |
+| `./manage migrate` | Run Alembic migrations |
+| `./manage seed` | Insert example seed data (skips if present) |
+| `./manage test` | Run backend tests via `uv run pytest` |
+| `./manage backend` / `frontend` | Run one service in the foreground |
+| `./manage doctor` | Check tooling and project health |
+
+UI: http://127.0.0.1:5173 · API docs: http://127.0.0.1:8000/docs
+
+Environment overrides: `BACKEND_PORT`, `FRONTEND_PORT`, `SEED_ON_STARTUP`.
+
+## Manual backend setup with uv
 
 ```bash
 cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+uv sync
 cp .env.example .env
-
-# Apply migrations
-alembic upgrade head
-
-# Seed example data (optional)
-SEED_ON_STARTUP=true uvicorn app.main:app --reload --port 8000
+uv run alembic upgrade head
+SEED_ON_STARTUP=true uv run uvicorn app.main:app --reload --port 8000
 ```
 
-API docs: http://127.0.0.1:8000/docs  
-Health: http://127.0.0.1:8000/health
+`uv.lock` is the source of truth. `requirements.txt` is an exported freeze for convenience:
+
+```bash
+cd backend
+uv export --no-dev --no-hashes -o requirements.txt
+```
 
 ### PostgreSQL via Docker
 
 ```bash
-# From repo root
 docker compose up -d db
 
 # In backend/.env
 DATABASE_URL=postgresql+psycopg2://dongle:dongle@localhost:5432/dongle_manager
 
-alembic upgrade head
-SEED_ON_STARTUP=true uvicorn app.main:app --reload --port 8000
+./manage migrate
+SEED_ON_STARTUP=true ./manage backend
 ```
 
-## Frontend setup
+## Manual frontend setup
 
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
-
-App: http://127.0.0.1:5173
-
-Vite proxies `/api` to the backend on port 8000.
 
 Optional env:
 
@@ -89,9 +111,9 @@ VITE_API_BASE_URL=/api
 ## Tests
 
 ```bash
-cd backend
-source .venv/bin/activate
-SEED_ON_STARTUP=false python -m pytest app/tests -v
+./manage test
+# or
+cd backend && uv run pytest app/tests -v
 ```
 
 Covered scenarios:
@@ -118,27 +140,11 @@ curl -F "file=@backend/samples/pcs.csv" -F "preview_only=false" \
   http://127.0.0.1:8000/api/import/pcs
 ```
 
-Paste import example:
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/import/dongles/text \
-  -H 'Content-Type: application/json' \
-  -d '{"text":"DNG-3001\\nDNG-3002","preview_only":false}'
-```
-
 ## Completeness check
 
 ```bash
 curl "http://127.0.0.1:8000/api/dongles/1/completeness?category_id=1"
 ```
-
-Response includes:
-
-- `total_required_modules`
-- `enabled_required_modules`
-- `missing_modules`
-- `extra_enabled_modules`
-- `is_complete`
 
 Required modules = active modules assigned to the category.  
 Complete = no missing required modules.

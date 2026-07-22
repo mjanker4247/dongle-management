@@ -1,0 +1,495 @@
+#!/usr/bin/env bash
+# Dongle Manager — local process manager for backend + frontend.
+#
+# Usage:
+#   ./manage <command> [options]
+#
+# Commands:
+#   setup | install   Install UV deps, npm deps, env files, migrate DB
+#   update            Pull latest lockfiles / reinstall deps and migrate
+#   start             Start backend + frontend (background)
+#   stop              Stop backend + frontend
+#   restart           Restart both services
+#   status            Show process / port status
+#   logs [backend|frontend|all]
+#   migrate           Run Alembic migrations
+#   seed              Start once with seed (or re-seed empty DB via API seed path)
+#   test              Run backend tests
+#   backend           Start only backend (foreground)
+#   frontend          Start only frontend (foreground)
+#   doctor            Check prerequisites and project health
+#   help              Show this help
+
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BACKEND_DIR="$ROOT_DIR/backend"
+FRONTEND_DIR="$ROOT_DIR/frontend"
+RUNTIME_DIR="$ROOT_DIR/.run"
+LOG_DIR="$RUNTIME_DIR/logs"
+PID_DIR="$RUNTIME_DIR/pids"
+
+BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
+BACKEND_PORT="${BACKEND_PORT:-8000}"
+FRONTEND_HOST="${FRONTEND_HOST:-127.0.0.1}"
+FRONTEND_PORT="${FRONTEND_PORT:-5173}"
+SEED_ON_STARTUP="${SEED_ON_STARTUP:-true}"
+
+BACKEND_PID_FILE="$PID_DIR/backend.pid"
+FRONTEND_PID_FILE="$PID_DIR/frontend.pid"
+BACKEND_LOG="$LOG_DIR/backend.log"
+FRONTEND_LOG="$LOG_DIR/frontend.log"
+
+export PATH="${HOME}/.local/bin:/usr/local/bin:${PATH}"
+
+color() {
+  local code="$1"; shift
+  if [[ -t 1 ]]; then
+    printf '\033[%sm%s\033[0m\n' "$code" "$*"
+  else
+    printf '%s\n' "$*"
+  fi
+}
+
+info() { color "36" "➜ $*"; }
+ok() { color "32" "✔ $*"; }
+warn() { color "33" "⚠ $*"; }
+err() { color "31" "✖ $*" >&2; }
+
+ensure_dirs() {
+  mkdir -p "$LOG_DIR" "$PID_DIR"
+}
+
+need_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    err "Missing required command: $1"
+    return 1
+  fi
+}
+
+ensure_uv() {
+  if command -v uv >/dev/null 2>&1; then
+    return 0
+  fi
+  info "Installing uv..."
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="${HOME}/.local/bin:${PATH}"
+  need_cmd uv
+}
+
+ensure_node() {
+  need_cmd node
+  need_cmd npm
+}
+
+ensure_env_files() {
+  if [[ ! -f "$BACKEND_DIR/.env" ]]; then
+    if [[ -f "$BACKEND_DIR/.env.example" ]]; then
+      cp "$BACKEND_DIR/.env.example" "$BACKEND_DIR/.env"
+      ok "Created backend/.env from .env.example"
+    else
+      warn "No backend/.env or .env.example found"
+    fi
+  fi
+  if [[ ! -f "$FRONTEND_DIR/.env" && -f "$FRONTEND_DIR/.env.example" ]]; then
+    cp "$FRONTEND_DIR/.env.example" "$FRONTEND_DIR/.env"
+    ok "Created frontend/.env from .env.example"
+  fi
+}
+
+backend_uv() {
+  (cd "$BACKEND_DIR" && uv "$@")
+}
+
+is_pid_running() {
+  local pid="${1:-}"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+read_pid() {
+  local file="$1"
+  if [[ -f "$file" ]]; then
+    tr -d '[:space:]' < "$file"
+  fi
+}
+
+port_in_use() {
+  local port="$1"
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn "sport = :$port" 2>/dev/null | tail -n +2 | grep -q .
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
+  else
+    return 1
+  fi
+}
+
+stop_pid_file() {
+  local name="$1"
+  local file="$2"
+  local port="${3:-}"
+  local pid
+  pid="$(read_pid "$file" || true)"
+  if is_pid_running "$pid"; then
+    info "Stopping $name (pid $pid)..."
+    # Kill process group when started with setsid; fall back to the pid itself.
+    kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      if ! is_pid_running "$pid"; then
+        break
+      fi
+      sleep 0.3
+    done
+    if is_pid_running "$pid"; then
+      warn "$name did not exit gracefully; sending SIGKILL"
+      kill -9 -- "-$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
+    fi
+    ok "Stopped $name"
+  else
+    info "$name is not running"
+  fi
+  rm -f "$file"
+
+  if [[ -n "$port" ]] && port_in_use "$port"; then
+    info "Freeing port $port still held by $name child processes..."
+    if command -v fuser >/dev/null 2>&1; then
+      fuser -k "${port}/tcp" >/dev/null 2>&1 || true
+    elif command -v lsof >/dev/null 2>&1; then
+      local pids
+      pids="$(lsof -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+      if [[ -n "$pids" ]]; then
+        # shellcheck disable=SC2086
+        kill $pids 2>/dev/null || true
+        sleep 0.3
+        # shellcheck disable=SC2086
+        kill -9 $pids 2>/dev/null || true
+      fi
+    fi
+  fi
+}
+
+cmd_setup() {
+  ensure_dirs
+  ensure_uv
+  ensure_node
+  ensure_env_files
+
+  info "Syncing backend dependencies with uv..."
+  backend_uv sync
+  ok "Backend dependencies ready"
+
+  info "Installing frontend dependencies..."
+  (cd "$FRONTEND_DIR" && npm install)
+  ok "Frontend dependencies ready"
+
+  info "Running database migrations..."
+  backend_uv run alembic upgrade head
+  ok "Migrations applied"
+
+  ok "Setup complete. Start the app with: ./manage start"
+}
+
+cmd_update() {
+  ensure_dirs
+  ensure_uv
+  ensure_node
+  ensure_env_files
+
+  info "Updating backend lock / dependencies..."
+  if [[ "${1:-}" == "--refresh" ]]; then
+    backend_uv lock --upgrade
+  fi
+  backend_uv sync
+  ok "Backend updated"
+
+  info "Updating frontend packages (npm install)..."
+  (cd "$FRONTEND_DIR" && npm install)
+  ok "Frontend updated"
+
+  info "Applying migrations..."
+  backend_uv run alembic upgrade head
+  ok "Update complete"
+}
+
+cmd_migrate() {
+  ensure_uv
+  backend_uv run alembic upgrade head
+  ok "Migrations applied"
+}
+
+cmd_test() {
+  ensure_uv
+  info "Running backend tests..."
+  (
+    cd "$BACKEND_DIR"
+    SEED_ON_STARTUP=false uv run pytest app/tests -v "$@"
+  )
+}
+
+start_backend_bg() {
+  ensure_dirs
+  ensure_uv
+  ensure_env_files
+
+  local existing
+  existing="$(read_pid "$BACKEND_PID_FILE" || true)"
+  if is_pid_running "$existing"; then
+    warn "Backend already running (pid $existing)"
+    return 0
+  fi
+  if port_in_use "$BACKEND_PORT"; then
+    err "Port $BACKEND_PORT is already in use"
+    return 1
+  fi
+
+  info "Starting backend on http://${BACKEND_HOST}:${BACKEND_PORT} ..."
+  (
+    cd "$BACKEND_DIR"
+    # setsid creates a new process group so stop can kill children (uvicorn reloader)
+    setsid env SEED_ON_STARTUP="$SEED_ON_STARTUP" \
+      uv run uvicorn app.main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT" --reload \
+      >>"$BACKEND_LOG" 2>&1 &
+    echo $! >"$BACKEND_PID_FILE"
+  )
+  sleep 1
+  local pid
+  pid="$(read_pid "$BACKEND_PID_FILE")"
+  if is_pid_running "$pid"; then
+    ok "Backend started (pid $pid) — log: $BACKEND_LOG"
+  else
+    err "Backend failed to start; see $BACKEND_LOG"
+    return 1
+  fi
+}
+
+start_frontend_bg() {
+  ensure_dirs
+  ensure_node
+  ensure_env_files
+
+  local existing
+  existing="$(read_pid "$FRONTEND_PID_FILE" || true)"
+  if is_pid_running "$existing"; then
+    warn "Frontend already running (pid $existing)"
+    return 0
+  fi
+  if port_in_use "$FRONTEND_PORT"; then
+    err "Port $FRONTEND_PORT is already in use"
+    return 1
+  fi
+
+  info "Starting frontend on http://${FRONTEND_HOST}:${FRONTEND_PORT} ..."
+  (
+    cd "$FRONTEND_DIR"
+    setsid npm run dev -- --host "$FRONTEND_HOST" --port "$FRONTEND_PORT" \
+      >>"$FRONTEND_LOG" 2>&1 &
+    echo $! >"$FRONTEND_PID_FILE"
+  )
+  sleep 1
+  local pid
+  pid="$(read_pid "$FRONTEND_PID_FILE")"
+  if is_pid_running "$pid"; then
+    ok "Frontend started (pid $pid) — log: $FRONTEND_LOG"
+  else
+    err "Frontend failed to start; see $FRONTEND_LOG"
+    return 1
+  fi
+}
+
+cmd_start() {
+  start_backend_bg
+  start_frontend_bg
+  echo
+  ok "Dongle Manager is running"
+  echo "  UI:      http://${FRONTEND_HOST}:${FRONTEND_PORT}"
+  echo "  API:     http://${BACKEND_HOST}:${BACKEND_PORT}/api"
+  echo "  Docs:    http://${BACKEND_HOST}:${BACKEND_PORT}/docs"
+  echo "  Status:  ./manage status"
+  echo "  Logs:    ./manage logs"
+  echo "  Stop:    ./manage stop"
+}
+
+cmd_stop() {
+  ensure_dirs
+  stop_pid_file "frontend" "$FRONTEND_PID_FILE" "$FRONTEND_PORT"
+  stop_pid_file "backend" "$BACKEND_PID_FILE" "$BACKEND_PORT"
+
+  if port_in_use "$FRONTEND_PORT"; then
+    warn "Port $FRONTEND_PORT still in use (may be an external process)"
+  fi
+  if port_in_use "$BACKEND_PORT"; then
+    warn "Port $BACKEND_PORT still in use (may be an external process)"
+  fi
+}
+
+cmd_restart() {
+  cmd_stop
+  sleep 0.5
+  cmd_start
+}
+
+cmd_status() {
+  ensure_dirs
+  local bpid fpid
+  bpid="$(read_pid "$BACKEND_PID_FILE" || true)"
+  fpid="$(read_pid "$FRONTEND_PID_FILE" || true)"
+
+  echo "Dongle Manager status"
+  echo "---------------------"
+  if is_pid_running "$bpid"; then
+    ok "Backend  running  pid=$bpid  http://${BACKEND_HOST}:${BACKEND_PORT}"
+  else
+    warn "Backend  stopped"
+  fi
+  if is_pid_running "$fpid"; then
+    ok "Frontend running  pid=$fpid  http://${FRONTEND_HOST}:${FRONTEND_PORT}"
+  else
+    warn "Frontend stopped"
+  fi
+
+  if command -v curl >/dev/null 2>&1 && is_pid_running "$bpid"; then
+    if curl -fsS "http://${BACKEND_HOST}:${BACKEND_PORT}/health" >/dev/null 2>&1; then
+      ok "Health   /health OK"
+    else
+      warn "Health   /health not responding yet"
+    fi
+  fi
+}
+
+cmd_logs() {
+  ensure_dirs
+  local target="${1:-all}"
+  case "$target" in
+    backend|be|api)
+      [[ -f "$BACKEND_LOG" ]] || { err "No backend log yet"; exit 1; }
+      tail -n 100 -f "$BACKEND_LOG"
+      ;;
+    frontend|fe|ui)
+      [[ -f "$FRONTEND_LOG" ]] || { err "No frontend log yet"; exit 1; }
+      tail -n 100 -f "$FRONTEND_LOG"
+      ;;
+    all|*)
+      touch "$BACKEND_LOG" "$FRONTEND_LOG"
+      if command -v multitail >/dev/null 2>&1; then
+        multitail -s 2 "$BACKEND_LOG" "$FRONTEND_LOG"
+      else
+        info "Showing combined logs (Ctrl+C to stop)"
+        tail -n 50 -F "$BACKEND_LOG" "$FRONTEND_LOG"
+      fi
+      ;;
+  esac
+}
+
+cmd_backend_fg() {
+  ensure_uv
+  ensure_env_files
+  info "Starting backend in foreground..."
+  cd "$BACKEND_DIR"
+  exec env SEED_ON_STARTUP="$SEED_ON_STARTUP" \
+    uv run uvicorn app.main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT" --reload
+}
+
+cmd_frontend_fg() {
+  ensure_node
+  ensure_env_files
+  info "Starting frontend in foreground..."
+  cd "$FRONTEND_DIR"
+  exec npm run dev -- --host "$FRONTEND_HOST" --port "$FRONTEND_PORT"
+}
+
+cmd_seed() {
+  ensure_uv
+  ensure_env_files
+  info "Ensuring migrations are applied..."
+  backend_uv run alembic upgrade head
+  info "Seeding database (no-op if data already exists)..."
+  backend_uv run python - <<'PY'
+from app.db.session import SessionLocal
+from app.db.base_models import Base
+from app.db.session import engine
+from app.services.seed import seed_database
+
+Base.metadata.create_all(bind=engine)
+db = SessionLocal()
+try:
+    seed_database(db)
+    print("Seed completed (or skipped if data already present).")
+finally:
+    db.close()
+PY
+  ok "Seed finished"
+}
+
+cmd_doctor() {
+  echo "Doctor"
+  echo "------"
+  if command -v uv >/dev/null 2>&1; then
+    ok "uv $(uv --version | awk '{print $2}')"
+  else
+    warn "uv not installed (./manage setup will install it)"
+  fi
+  if command -v node >/dev/null 2>&1; then
+    ok "node $(node --version)"
+  else
+    err "node missing"
+  fi
+  if command -v npm >/dev/null 2>&1; then
+    ok "npm $(npm --version)"
+  else
+    err "npm missing"
+  fi
+  [[ -f "$BACKEND_DIR/pyproject.toml" ]] && ok "backend/pyproject.toml present" || err "backend/pyproject.toml missing"
+  [[ -f "$BACKEND_DIR/uv.lock" ]] && ok "backend/uv.lock present" || warn "backend/uv.lock missing (run ./manage setup)"
+  [[ -f "$FRONTEND_DIR/package.json" ]] && ok "frontend/package.json present" || err "frontend/package.json missing"
+  [[ -f "$BACKEND_DIR/.env" ]] && ok "backend/.env present" || warn "backend/.env missing"
+  cmd_status || true
+}
+
+cmd_help() {
+  sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+  cat <<EOF
+
+Environment overrides:
+  BACKEND_HOST / BACKEND_PORT     default 127.0.0.1 / 8000
+  FRONTEND_HOST / FRONTEND_PORT   default 127.0.0.1 / 5173
+  SEED_ON_STARTUP                 default true
+
+Examples:
+  ./manage setup
+  ./manage start
+  ./manage status
+  ./manage logs backend
+  ./manage update
+  ./manage update --refresh   # also refresh uv.lock upgrades
+  ./manage test
+  ./manage stop
+EOF
+}
+
+main() {
+  local cmd="${1:-help}"
+  shift || true
+  case "$cmd" in
+    setup|install) cmd_setup "$@" ;;
+    update|upgrade) cmd_update "$@" ;;
+    start|up) cmd_start "$@" ;;
+    stop|down) cmd_stop "$@" ;;
+    restart) cmd_restart "$@" ;;
+    status|ps) cmd_status "$@" ;;
+    logs|log) cmd_logs "$@" ;;
+    migrate|db) cmd_migrate "$@" ;;
+    seed) cmd_seed "$@" ;;
+    test|tests) cmd_test "$@" ;;
+    backend|be|api) cmd_backend_fg "$@" ;;
+    frontend|fe|ui) cmd_frontend_fg "$@" ;;
+    doctor|check) cmd_doctor "$@" ;;
+    help|-h|--help) cmd_help ;;
+    *)
+      err "Unknown command: $cmd"
+      cmd_help
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

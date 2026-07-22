@@ -3,8 +3,31 @@ name = "dongle-manager"
 version = "1.0.0"
 description = "Physical software dongle management system"
 requires-python = ">=3.11"
+dependencies = [
+    "fastapi==0.115.6",
+    "uvicorn[standard]==0.34.0",
+    "sqlalchemy==2.0.36",
+    "alembic==1.14.0",
+    "pydantic==2.10.3",
+    "pydantic-settings==2.6.1",
+    "python-multipart==0.0.20",
+    "httpx==0.28.1",
+    "aiosqlite==0.20.0",
+    "psycopg2-binary==2.9.10",
+    "greenlet==3.1.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==8.3.4",
+    "pytest-asyncio==0.24.0",
+]
+
+[tool.uv]
+package = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["app/tests"]
 pythonpath = ["."]
+asyncio_default_fixture_loop_scope = "function"

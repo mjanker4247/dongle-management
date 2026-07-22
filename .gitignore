@@ -12,6 +12,9 @@ dongle_manager.db
 *.db
 .env
 
+# Runtime (./manage)
+.run/
+
 # Node
 node_modules/
 dist/
