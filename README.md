@@ -26,17 +26,20 @@ categories, and test modules.
 ```
 backend/          FastAPI + SQLAlchemy 2 + Alembic (managed with uv)
 frontend/         React + Vite + TypeScript + MUI
-manage            Local start/stop/update management script
+manage            Local start/stop/update script (Linux/macOS)
+manage.ps1        Local start/stop/update script (Windows PowerShell)
 docker-compose.yml
 ```
 
 ## Prerequisites
 
-- [uv](https://docs.astral.sh/uv/) (Python package manager) — installed automatically by `./manage setup` if missing
+- [uv](https://docs.astral.sh/uv/) (Python package manager) — installed automatically by `./manage setup` / `.\manage.ps1 setup` if missing
 - Node.js 20+
 - Optional: Docker / Docker Compose for PostgreSQL stack
 
 ## Quick start (recommended)
+
+### Linux / macOS
 
 ```bash
 ./manage setup    # install uv deps, npm deps, create .env, migrate DB
@@ -46,19 +49,34 @@ docker-compose.yml
 ./manage stop
 ```
 
+### Windows (PowerShell)
+
+```powershell
+# If scripts are blocked, run once:
+# Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+
+.\manage.ps1 setup
+.\manage.ps1 start
+.\manage.ps1 status
+.\manage.ps1 logs
+.\manage.ps1 stop
+```
+
 | Command | Description |
 |---------|-------------|
-| `./manage setup` | Install dependencies, env files, and migrate |
-| `./manage update` | Re-sync deps and apply migrations |
-| `./manage update --refresh` | Also refresh `uv.lock` upgrades |
-| `./manage start` / `stop` / `restart` | Control both services |
-| `./manage status` | Process and health status |
-| `./manage logs [backend\|frontend\|all]` | Tail logs |
-| `./manage migrate` | Run Alembic migrations |
-| `./manage seed` | Insert example seed data (skips if present) |
-| `./manage test` | Run backend tests via `uv run pytest` |
-| `./manage backend` / `frontend` | Run one service in the foreground |
-| `./manage doctor` | Check tooling and project health |
+| `setup` | Install dependencies, env files, and migrate |
+| `update` | Re-sync deps and apply migrations |
+| `update --refresh` | Also refresh `uv.lock` upgrades |
+| `start` / `stop` / `restart` | Control both services |
+| `status` | Process and health status |
+| `logs [backend\|frontend\|all]` | Tail logs |
+| `migrate` | Run Alembic migrations |
+| `seed` | Insert example seed data (skips if present) |
+| `test` | Run backend tests via `uv run pytest` |
+| `backend` / `frontend` | Run one service in the foreground |
+| `doctor` | Check tooling and project health |
+
+Use `./manage <cmd>` on Unix or `.\manage.ps1 <cmd>` on Windows.
 
 UI: http://127.0.0.1:5173 · API docs: http://127.0.0.1:8000/docs
 
