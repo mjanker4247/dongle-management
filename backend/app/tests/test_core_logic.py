@@ -1,32 +1,20 @@
-from app.schemas.dongle import DongleModulesUpdate, DongleModuleLink
+from app.tests.helpers import setup_basic_inventory
 
 
 def _setup_basic_data(client):
-    loc = client.post("/api/locations", json={"name": "Lab"}).json()
-    pc = client.post("/api/pcs", json={"name": "PC-1", "location_id": loc["id"]}).json()
-    modules = []
-    for i, name in enumerate(["Brake", "Safety", "Emissions", "Noise"], start=1):
-        modules.append(
-            client.post(
-                "/api/test-modules",
-                json={"name": name, "sort_index": i * 10, "is_active": True},
-            ).json()
-        )
-    cat = client.post("/api/categories", json={"name": "Basic"}).json()
-    client.put(
-        f"/api/categories/{cat['id']}/modules",
-        json={"test_module_ids": [modules[0]["id"], modules[1]["id"]]},
+    data = setup_basic_inventory(client)
+    return (
+        data["location"],
+        data["pc"],
+        data["modules"],
+        data["category"],
+        data["dongle"],
     )
-    dongle = client.post(
-        "/api/dongles", json={"dongle_id": "DNG-1", "pc_id": pc["id"]}
-    ).json()
-    return loc, pc, modules, cat, dongle
 
 
 def test_completeness_complete_and_incomplete(client):
     _, _, modules, cat, dongle = _setup_basic_data(client)
 
-    # Enable only Brake -> incomplete
     client.put(
         f"/api/dongles/{dongle['id']}/modules",
         json={
@@ -44,7 +32,6 @@ def test_completeness_complete_and_incomplete(client):
     assert result["enabled_required_modules"] == 1
     assert [m["name"] for m in result["missing_modules"]] == ["Safety"]
 
-    # Enable both required + an extra -> complete with extras
     client.put(
         f"/api/dongles/{dongle['id']}/modules",
         json={
@@ -79,12 +66,10 @@ def test_dongle_assigned_to_only_one_pc(client):
     ).json()
     assert updated["pc_id"] == pc2["id"]
 
-    # Re-fetch and ensure only one PC assignment exists
     detail = client.get(f"/api/dongles/{dongle['id']}").json()
     assert detail["pc_id"] == pc2["id"]
     assert detail["pc"]["name"] == "PC-B"
 
-    # Unassign
     cleared = client.post(
         f"/api/dongles/{dongle['id']}/assign-pc",
         json={"pc_id": None},
@@ -127,7 +112,6 @@ def test_enable_disable_modules_on_dongle(client):
     assert enabled_map[modules[0]["id"]] is True
     assert enabled_map[modules[1]["id"]] is False
 
-    # Toggle
     updated = client.put(
         f"/api/dongles/{dongle['id']}/modules",
         json={
