@@ -101,6 +101,23 @@ backend_uv() {
   (cd "$BACKEND_DIR" && uv "$@")
 }
 
+needs_postgres_extra() {
+  local db_url="${DATABASE_URL:-}"
+  if [[ -z "$db_url" && -f "$BACKEND_DIR/.env" ]]; then
+    db_url="$(grep -E '^DATABASE_URL=' "$BACKEND_DIR/.env" | head -n1 | cut -d= -f2- | tr -d '"' | tr -d "'")"
+  fi
+  [[ "$db_url" == postgresql* || "$db_url" == postgres* ]]
+}
+
+backend_uv_sync() {
+  if needs_postgres_extra; then
+    info "DATABASE_URL uses PostgreSQL — installing postgres extra (psycopg)"
+    backend_uv sync --extra postgres "$@"
+  else
+    backend_uv sync "$@"
+  fi
+}
+
 is_pid_running() {
   local pid="${1:-}"
   [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
@@ -175,7 +192,7 @@ cmd_setup() {
   ensure_env_files
 
   info "Syncing backend dependencies with uv..."
-  backend_uv sync
+  backend_uv_sync
   ok "Backend dependencies ready"
 
   info "Installing frontend dependencies..."
@@ -199,7 +216,7 @@ cmd_update() {
   if [[ "${1:-}" == "--refresh" ]]; then
     backend_uv lock --upgrade
   fi
-  backend_uv sync
+  backend_uv_sync
   ok "Backend updated"
 
   info "Updating frontend packages (npm install)..."

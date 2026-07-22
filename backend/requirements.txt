@@ -45,8 +45,6 @@ mako==1.3.12
     # via alembic
 markupsafe==3.0.3
     # via mako
-psycopg2-binary==2.9.10
-    # via dongle-manager
 pydantic==2.10.3
     # via
     #   dongle-manager

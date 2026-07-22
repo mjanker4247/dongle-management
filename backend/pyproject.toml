@@ -13,8 +13,14 @@ dependencies = [
     "python-multipart==0.0.20",
     "httpx==0.28.1",
     "aiosqlite==0.20.0",
-    "psycopg2-binary==2.9.10",
     "greenlet==3.1.1",
+]
+
+[project.optional-dependencies]
+# PostgreSQL driver (not required for default SQLite local development).
+# Install with: uv sync --extra postgres
+postgres = [
+    "psycopg[binary]>=3.2.3",
 ]
 
 [dependency-groups]
@@ -25,6 +31,7 @@ dev = [
 
 [tool.uv]
 package = false
+default-groups = ["dev"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
