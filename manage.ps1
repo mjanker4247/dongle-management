@@ -131,6 +131,31 @@ function Invoke-BackendUv {
     }
 }
 
+function Test-NeedsPostgresExtra {
+    $dbUrl = $env:DATABASE_URL
+    if ([string]::IsNullOrWhiteSpace($dbUrl)) {
+        $envFile = Join-Path $BackendDir '.env'
+        if (Test-Path $envFile) {
+            $line = Get-Content $envFile | Where-Object { $_ -match '^DATABASE_URL=' } | Select-Object -First 1
+            if ($line) {
+                $dbUrl = ($line -split '=', 2)[1].Trim().Trim('"').Trim("'")
+            }
+        }
+    }
+    return ($dbUrl -like 'postgresql*' -or $dbUrl -like 'postgres*')
+}
+
+function Invoke-BackendUvSync {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$SyncArgs)
+    if (Test-NeedsPostgresExtra) {
+        Write-Info 'DATABASE_URL uses PostgreSQL — installing postgres extra (psycopg)'
+        Invoke-BackendUv sync --extra postgres @SyncArgs
+    }
+    else {
+        Invoke-BackendUv sync @SyncArgs
+    }
+}
+
 function Read-PidFile([string]$Path) {
     if (-not (Test-Path $Path)) { return $null }
     $raw = (Get-Content -Path $Path -Raw).Trim()
@@ -299,7 +324,7 @@ function Invoke-Setup {
     Ensure-EnvFiles
 
     Write-Info 'Syncing backend dependencies with uv...'
-    Invoke-BackendUv sync
+    Invoke-BackendUvSync
     Write-Ok 'Backend dependencies ready'
 
     Write-Info 'Installing frontend dependencies...'
@@ -329,7 +354,7 @@ function Invoke-Update {
     if ($ArgsRest -contains '--refresh') {
         Invoke-BackendUv lock --upgrade
     }
-    Invoke-BackendUv sync
+    Invoke-BackendUvSync
     Write-Ok 'Backend updated'
 
     Write-Info 'Updating frontend packages (npm install)...'

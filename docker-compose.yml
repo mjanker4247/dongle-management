@@ -19,7 +19,7 @@ services:
     build:
       context: ./backend
     environment:
-      DATABASE_URL: postgresql+psycopg2://dongle:dongle@db:5432/dongle_manager
+      DATABASE_URL: postgresql+psycopg://dongle:dongle@db:5432/dongle_manager
       CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000
       SEED_ON_STARTUP: "true"
     ports:

@@ -82,6 +82,25 @@ UI: http://127.0.0.1:5173 · API docs: http://127.0.0.1:8000/docs
 
 Environment overrides: `BACKEND_PORT`, `FRONTEND_PORT`, `SEED_ON_STARTUP`.
 
+### Windows note (SQLite vs PostgreSQL)
+
+Local development defaults to **SQLite** and does **not** need a PostgreSQL driver.
+That avoids common Windows build failures with older `psycopg2-binary` packages
+(especially on newer Python versions without a prebuilt wheel).
+
+Only install the Postgres extra when you actually use PostgreSQL:
+
+```powershell
+cd backend
+uv sync --extra postgres
+```
+
+Use this connection string:
+
+```text
+DATABASE_URL=postgresql+psycopg://dongle:dongle@localhost:5432/dongle_manager
+```
+
 ## Manual backend setup with uv
 
 ```bash
@@ -105,7 +124,10 @@ uv export --no-dev --no-hashes -o requirements.txt
 docker compose up -d db
 
 # In backend/.env
-DATABASE_URL=postgresql+psycopg2://dongle:dongle@localhost:5432/dongle_manager
+DATABASE_URL=postgresql+psycopg://dongle:dongle@localhost:5432/dongle_manager
+
+# Install the Postgres driver (optional; not needed for SQLite)
+cd backend && uv sync --extra postgres
 
 ./manage migrate
 SEED_ON_STARTUP=true ./manage backend
